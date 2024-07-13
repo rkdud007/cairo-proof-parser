@@ -1,6 +1,6 @@
 use crate::{
     layout::Layout,
-    proof_params::{ProofParameters, ProverConfig},
+    proof_params::{Fri, ProofParameters, ProverConfig},
 };
 
 #[derive(Clone, Copy)]

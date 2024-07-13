@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "proof-parser", "serde-felt",
-]
+members = ["proof-parser", "serde-felt"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,3 +21,9 @@ tokio = { version = "1.37.0", features = ["full"] }
 url = "2.5.0"
 serde-felt = { path = "./serde-felt" }
 starknet-ff = "0.3.7"
+starknet-types-core = "0.1.5"
+cairovm_verifier_stark = { git = "https://github.com/iosis-tech/cairovm-verifier", branch = "finalize-stark" }
+cairovm_verifier_commitment = { git = "https://github.com/iosis-tech/cairovm-verifier", branch = "finalize-stark" }
+cairovm_verifier_air = { git = "https://github.com/iosis-tech/cairovm-verifier", branch = "finalize-stark" }
+cairovm_verifier_fri = { git = "https://github.com/iosis-tech/cairovm-verifier", branch = "finalize-stark" }
+cairovm_verifier_pow = { git = "https://github.com/iosis-tech/cairovm-verifier", branch = "finalize-stark" }

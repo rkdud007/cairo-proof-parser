@@ -5,10 +5,38 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
+use cairovm_verifier_air::{
+    public_memory::PublicInput as CairoPublicInput,
+    trace::{
+        config::Config as TraceConfig, Decommitment as TraceDecommitment,
+        UnsentCommitment as TraceUnsentCommitment, Witness as TraceWitness,
+    },
+    types::{AddrValue, Page, SegmentInfo},
+};
+use cairovm_verifier_commitment::{
+    table::{
+        self,
+        config::Config as TableCommitmentConfig,
+        types::{Decommitment as TableDecommitment, Witness as TableWitness},
+    },
+    vector::{config::Config as VectorCommitmentConfig, types::Witness as VectorWitness},
+};
+use cairovm_verifier_fri::{
+    config::Config as FriConfig,
+    types::{LayerWitness, UnsentCommitment as FriUnsentCommitment, Witness as FriWitness},
+};
+use cairovm_verifier_pow::{
+    config::Config as ProofOfWorkConfig, pow::UnsentCommitment as ProofOfWorkUnsentCommitment,
+};
+use cairovm_verifier_stark::{
+    config::StarkConfig,
+    types::{StarkProof, StarkUnsentCommitment, StarkWitness},
+};
 use num_bigint::BigUint;
 use serde::Deserialize;
 use serde_felt::from_felts_with_lengths;
 use starknet_crypto::FieldElement;
+use starknet_types_core::felt::Felt;
 
 use crate::{
     annotations::Annotations,
@@ -16,12 +44,6 @@ use crate::{
     layout::Layout,
     proof_params::{ProofParameters, ProverConfig},
     proof_structure::ProofStructure,
-    stark_proof::{
-        CairoPublicInput, FriConfig, FriLayerWitness, FriUnsentCommitment, FriWitness,
-        ProofOfWorkConfig, PublicMemoryCell, SegmentInfo, StarkConfig, StarkProof,
-        StarkUnsentCommitment, StarkWitness, TableCommitmentConfig, TracesConfig,
-        TracesUnsentCommitment, VectorCommitmentConfig,
-    },
     utils::log2_if_power_of_2,
 };
 
@@ -59,11 +81,11 @@ pub struct PublicInput {
     rc_max: u32,
 }
 
-pub fn bigint_to_fe(bigint: &BigUint) -> FieldElement {
-    FieldElement::from_hex_be(&bigint.to_str_radix(16)).unwrap()
+pub fn bigint_to_fe(bigint: &BigUint) -> Felt {
+    Felt::from_hex(&bigint.to_str_radix(16)).unwrap()
 }
 
-pub fn bigints_to_fe(bigint: &[BigUint]) -> Vec<FieldElement> {
+pub fn bigints_to_fe(bigint: &[BigUint]) -> Vec<Felt> {
     bigint.iter().map(bigint_to_fe).collect()
 }
 
@@ -86,35 +108,37 @@ impl ProofJSON {
         };
 
         let log_eval_domain_size = self.log_eval_damain_size()?;
-        let traces = TracesConfig {
+        let traces = TraceConfig {
             original: TableCommitmentConfig {
-                n_columns: consts.num_columns_first,
+                n_columns: consts.num_columns_first.into(),
                 vector: VectorCommitmentConfig {
-                    height: log_eval_domain_size,
-                    n_verifier_friendly_commitment_layers,
+                    height: log_eval_domain_size.into(),
+                    n_verifier_friendly_commitment_layers: n_verifier_friendly_commitment_layers
+                        .into(),
                 },
             },
             interaction: TableCommitmentConfig {
-                n_columns: consts.num_columns_second,
+                n_columns: consts.num_columns_second.into(),
                 vector: VectorCommitmentConfig {
-                    height: log_eval_domain_size,
-                    n_verifier_friendly_commitment_layers,
+                    height: log_eval_domain_size.into(),
+                    n_verifier_friendly_commitment_layers: n_verifier_friendly_commitment_layers
+                        .into(),
                 },
             },
         };
 
         let composition = TableCommitmentConfig {
-            n_columns: consts.constraint_degree,
+            n_columns: consts.constraint_degree.into(),
             vector: VectorCommitmentConfig {
-                height: log_eval_domain_size,
-                n_verifier_friendly_commitment_layers,
+                height: log_eval_domain_size.into(),
+                n_verifier_friendly_commitment_layers: n_verifier_friendly_commitment_layers.into(),
             },
         };
 
         let fri = self.proof_parameters.stark.fri.clone();
 
         let proof_of_work = ProofOfWorkConfig {
-            n_bits: fri.proof_of_work_bits,
+            n_bits: fri.proof_of_work_bits as u8,
         };
         let n_queries = fri.n_queries;
 
@@ -124,21 +148,22 @@ impl ProofJSON {
         let log_last_layer_degree_bound = log2_if_power_of_2(fri.last_layer_degree_bound)
             .ok_or(anyhow::anyhow!("Invalid last layer degree bound"))?;
         let fri = FriConfig {
-            log_input_size: layer_log_sizes[0],
-            n_layers: fri_step_list.len() as u32,
+            log_input_size: layer_log_sizes[0].into(),
+            n_layers: fri_step_list.len().into(),
             inner_layers: fri_step_list[1..]
                 .iter()
                 .zip(layer_log_sizes[2..].iter())
                 .map(|(layer_steps, layer_log_rows)| TableCommitmentConfig {
-                    n_columns: 2_u32.pow(*layer_steps),
+                    n_columns: 2_u32.pow(*layer_steps).into(),
                     vector: VectorCommitmentConfig {
-                        height: *layer_log_rows,
-                        n_verifier_friendly_commitment_layers,
+                        height: layer_log_rows.to_owned().into(),
+                        n_verifier_friendly_commitment_layers:
+                            n_verifier_friendly_commitment_layers.into(),
                     },
                 })
                 .collect(),
-            fri_step_sizes: fri_step_list,
-            log_last_layer_degree_bound,
+            fri_step_sizes: fri_step_list.into_iter().map(|a| a.into()).collect(),
+            log_last_layer_degree_bound: log_last_layer_degree_bound.into(),
         };
 
         Ok(StarkConfig {
@@ -146,10 +171,10 @@ impl ProofJSON {
             composition,
             fri,
             proof_of_work,
-            log_trace_domain_size: self.log_trace_domain_size()?,
-            n_queries,
-            log_n_cosets: stark.log_n_cosets,
-            n_verifier_friendly_commitment_layers,
+            log_trace_domain_size: self.log_trace_domain_size()?.into(),
+            n_queries: n_queries.into(),
+            log_n_cosets: stark.log_n_cosets.into(),
+            n_verifier_friendly_commitment_layers: n_verifier_friendly_commitment_layers.into(),
         })
     }
 
@@ -176,7 +201,7 @@ impl ProofJSON {
         public_input: PublicInput,
         // z: BigUint,
         // alpha: BigUint,
-    ) -> anyhow::Result<CairoPublicInput<FieldElement>> {
+    ) -> anyhow::Result<CairoPublicInput> {
         let continuous_page_headers = vec![];
         // Self::continuous_page_headers(&public_input.public_memory, z, alpha)?; this line does for now anyway
         let main_page = Self::main_page(&public_input.public_memory)?;
@@ -184,58 +209,48 @@ impl ProofJSON {
             .dynamic_params
             .unwrap_or_default()
             .into_iter()
-            .map(|e| {
-                Ok((
-                    e.0,
-                    FieldElement::from_hex_be(&e.1.to_str_radix(16))
-                        .context("Invalid dynamic param")?,
-                ))
-            })
-            .collect::<anyhow::Result<_>>()?;
+            .map(|e| Felt::from_hex(&e.1.to_str_radix(16)).context("Invalid dynamic param"))
+            .collect::<anyhow::Result<Vec<Felt>>>()?;
         let memory_segments = Builtin::sort_segments(public_input.memory_segments)
             .into_iter()
             .map(|s| SegmentInfo {
-                begin_addr: s.begin_addr,
-                stop_ptr: s.stop_ptr,
+                begin_addr: s.begin_addr.into(),
+                stop_ptr: s.stop_ptr.into(),
             })
             .collect::<Vec<_>>();
-        let layout =
-            FieldElement::from_hex_be(&prefix_hex::encode(public_input.layout.bytes_encode()))?;
+        let layout = Felt::from_hex(&prefix_hex::encode(public_input.layout.bytes_encode()))?;
         let (padding_addr, padding_value) = match public_input.public_memory.first() {
-            Some(m) => (m.address, FieldElement::from_hex_be(&m.value)?),
+            Some(m) => (m.address, Felt::from_hex(&m.value)?),
             None => anyhow::bail!("Invalid public memory"),
         };
         Ok(CairoPublicInput {
             log_n_steps: log2_if_power_of_2(public_input.n_steps)
-                .ok_or(anyhow::anyhow!("Invalid number of steps"))?,
-            range_check_min: public_input.rc_min,
-            range_check_max: public_input.rc_max,
+                .ok_or(anyhow::anyhow!("Invalid number of steps"))?
+                .into(),
+            range_check_min: public_input.rc_min.into(),
+            range_check_max: public_input.rc_max.into(),
             layout,
             dynamic_params,
-            n_segments: memory_segments.len(),
             segments: memory_segments,
-            padding_addr,
+            padding_addr: padding_addr.into(),
             padding_value,
-            main_page_len: main_page.len(),
             main_page,
-            n_continuous_pages: continuous_page_headers.len(),
             continuous_page_headers,
         })
     }
 
-    fn main_page(
-        public_memory: &[PublicMemoryElement],
-    ) -> anyhow::Result<Vec<PublicMemoryCell<FieldElement>>> {
-        public_memory
+    fn main_page(public_memory: &[PublicMemoryElement]) -> anyhow::Result<Page> {
+        let vec_add_value = public_memory
             .iter()
             .filter(|m| m.page == 0)
             .map(|m| {
-                Ok(PublicMemoryCell {
-                    address: m.address,
-                    value: FieldElement::from_hex_be(&m.value).context("Invalid memory value")?,
+                Ok(AddrValue {
+                    address: m.address.into(),
+                    value: Felt::from_hex(&m.value).context("Invalid memory value")?,
                 })
             })
-            .collect::<anyhow::Result<Vec<_>>>()
+            .collect::<anyhow::Result<Vec<AddrValue>>>()?;
+        Ok(Page(vec_add_value))
     }
 
     fn _continuous_page_headers(
@@ -249,7 +264,7 @@ impl ProofJSON {
 
     fn stark_unsent_commitment(&self, annotations: &Annotations) -> StarkUnsentCommitment {
         StarkUnsentCommitment {
-            traces: TracesUnsentCommitment {
+            traces: TraceUnsentCommitment {
                 original: bigint_to_fe(&annotations.original_commitment_hash),
                 interaction: bigint_to_fe(&annotations.interaction_commitment_hash),
             },
@@ -259,25 +274,53 @@ impl ProofJSON {
                 inner_layers: bigints_to_fe(&annotations.fri_layers_commitments),
                 last_layer_coefficients: bigints_to_fe(&annotations.fri_last_layer_coefficients),
             },
-            proof_of_work_nonce: bigint_to_fe(&annotations.proof_of_work_nonce),
+            proof_of_work: ProofOfWorkUnsentCommitment {
+                nonce: annotations.proof_of_work_nonce.to_u64_digits()[0],
+            },
         }
     }
 
     fn stark_witness(annotations: &Annotations) -> StarkWitness {
         StarkWitness {
-            original_leaves: bigints_to_fe(&annotations.original_leaves),
-            interaction_leaves: bigints_to_fe(&annotations.interaction_leaves),
-            original_authentications: bigints_to_fe(&annotations.original_authentications),
-            interaction_authentications: bigints_to_fe(&annotations.interaction_authentications),
-            composition_leaves: bigints_to_fe(&annotations.composition_leaves),
-            composition_authentications: bigints_to_fe(&annotations.composition_authentications),
+            traces_decommitment: TraceDecommitment {
+                original: TableDecommitment {
+                    values: bigints_to_fe(&annotations.original_leaves),
+                },
+                interaction: TableDecommitment {
+                    values: bigints_to_fe(&annotations.interaction_leaves),
+                },
+            },
+            traces_witness: TraceWitness {
+                original: TableWitness {
+                    vector: VectorWitness {
+                        authentications: bigints_to_fe(&annotations.original_authentications),
+                    },
+                },
+                interaction: TableWitness {
+                    vector: VectorWitness {
+                        authentications: bigints_to_fe(&annotations.interaction_authentications),
+                    },
+                },
+            },
+            composition_decommitment: table::types::Decommitment {
+                values: bigints_to_fe(&annotations.composition_leaves),
+            },
+            composition_witness: TableWitness {
+                vector: VectorWitness {
+                    authentications: bigints_to_fe(&annotations.composition_authentications),
+                },
+            },
             fri_witness: FriWitness {
                 layers: annotations
                     .fri_witnesses
                     .iter()
-                    .map(|w| FriLayerWitness {
+                    .map(|w| LayerWitness {
                         leaves: bigints_to_fe(&w.leaves),
-                        table_witness: bigints_to_fe(&w.authentications),
+                        table_witness: TableWitness {
+                            vector: VectorWitness {
+                                authentications: bigints_to_fe(&w.authentications),
+                            },
+                        },
                     })
                     .collect(),
             },
@@ -322,7 +365,7 @@ pub fn proof_from_annotations(value: ProofJSON) -> anyhow::Result<StarkProof> {
         config,
         public_input,
         unsent_commitment,
-        witness: witness.into(),
+        witness,
     })
 }
 
@@ -393,7 +436,7 @@ impl TryFrom<ProofJSON> for StarkProof {
             config,
             public_input,
             unsent_commitment,
-            witness: witness.into(),
+            witness,
         };
 
         Ok(proof)
