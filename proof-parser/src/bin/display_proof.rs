@@ -1,13 +1,16 @@
-use std::io::{self, Read};
+use std::{
+    fs,
+    io::{self, Read},
+};
 
 use cairo_proof_parser::{parse, to_felts};
 
 fn main() -> anyhow::Result<()> {
-    let mut input = String::new();
-    io::stdin().read_to_string(&mut input)?;
+    let file_path = "cairo0_example_proof.json";
+    let file = fs::read_to_string(file_path)?;
 
     // Parse the input as an AST
-    let proof = parse(&input)?;
+    let proof = parse(&file)?;
     let serialized = to_felts(&proof);
 
     println!("{serialized:?}");

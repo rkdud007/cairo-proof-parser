@@ -51,6 +51,8 @@ fn authentication_additional_queries(
         let ProofCharacteristics(proof_params, proof_config, layout) = proof_args;
         let without_additional = ProofStructure::new(proof_params, proof_config, layout, None);
 
+        println!("{}, {}", proof_len, without_additional.expected_len());
+
         let authentication_count = 3 + without_additional.witness.len();
         (proof_len - without_additional.expected_len()) / authentication_count
     } else {
